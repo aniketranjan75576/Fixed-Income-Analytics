@@ -13,6 +13,7 @@ This project implements a **yield curve bootstrapping engine** that constructs a
 ├── instruments.py      # Instrument class definitions and cash flow generation
 ├── marketData.py       # Market data loader with fake quotes
 ├── engine.py           # Yield curve bootstrapping engine
+├── visualization.py    # Visualization and plotting utilities
 └── README.md           # This file
 ```
 
@@ -55,6 +56,17 @@ Core bootstrapping engine:
   - **Swaps**: Numerical solution using Newton-Raphson optimization
   - Sorts instruments by maturity for sequential bootstrapping
 
+### 4. **visualization.py**
+Visualization utilities for yield curves:
+
+- **`CurveVisualizer`**: Plotting class with static methods:
+  - `plot_zero_curve()`: Plots zero-rate curve with bootstrapped points
+  - `plot_discount_factors()`: Visualizes discount factor curve
+  - `plot_forward_rates()`: Shows implied 1-year forward rates
+  - `plot_all()`: Creates a 3-subplot dashboard with all curves
+
+Uses matplotlib for publication-quality plots with grid, legends, and proper formatting.
+
 ## Key Features
 
 ✅ **Analytical Solution for Deposits**: Direct calculation of zero rates  
@@ -69,6 +81,7 @@ Core bootstrapping engine:
 from marketData import get_market_data
 from instruments import Deposit, InterestRateSwap
 from engine import BootstrapEngine
+from visualization import CurveVisualizer
 
 # 1. Get market data
 market_df = get_market_data()
@@ -96,6 +109,14 @@ curve = engine.build_curve(instruments)
 # 4. Use the curve
 zero_rate_at_2y = curve.get_zero_rate(2.0)
 discount_factor_at_2y = curve.get_discount_factor(2.0)
+
+# 5. Visualize the curve
+visualizer = CurveVisualizer()
+visualizer.plot_zero_curve(curve)
+visualizer.plot_discount_factors(curve)
+visualizer.plot_forward_rates(curve)
+# Or plot all in one dashboard:
+visualizer.plot_all(curve, show=True)
 ```
 
 ## Output Example
@@ -116,10 +137,11 @@ SWAP_3Y         | 3.00    | 4.80%       | 4.7931%
 - `numpy`: Numerical computations
 - `pandas`: Data handling
 - `scipy`: Optimization (Newton-Raphson)
+- `matplotlib`: Visualization and plotting
 
 Install dependencies:
 ```bash
-pip install numpy pandas scipy
+pip install numpy pandas scipy matplotlib
 ```
 
 ## Mathematical Details
