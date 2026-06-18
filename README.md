@@ -1,19 +1,20 @@
 # Fixed Income Analytics
 
-A Python-based framework for yield curve bootstrapping and fixed income instrument pricing using market data.
+A Python-based framework for yield curve bootstrapping, parametric curve fitting, and fixed income instrument pricing.
 
 ## Overview
 
-This project implements a **yield curve bootstrapping engine** that constructs a zero-rate curve from market quotes of liquid instruments (deposits and interest rate swaps). The engine uses both analytical solutions (for deposits) and numerical optimization (for swaps) to solve for implied zero rates.
+This project constructs zero-rate curves from liquid market quotes (deposits and interest rate swaps) using a dual-engine approach. It provides both an **Exact Bootstrapping Engine** with continuous spline interpolation and a **Parametric Engine** based on the Nelson-Siegel-Svensson (NSS) model.
 
 ## Project Structure
 
-```
+```text
 .
 ├── instruments.py      # Instrument class definitions and cash flow generation
-├── marketData.py       # Market data loader with fake quotes
-├── engine.py           # Yield curve bootstrapping engine
-├── visualization.py    # Visualization and plotting utilities
+├── marketData.py       # Market data loader with sample quotes
+├── engine.py           # Core engines (Bootstrap & NSS)
+├── visualization.py    # Visualization and comparison utilities
+├── main.py             # Execution script for curve generation and comparison
 └── README.md           # This file
 ```
 
@@ -45,132 +46,64 @@ Provides market data:
   - **Inverted yield curve** for mathematically interesting results
 
 ### 3. **engine.py**
-Core bootstrapping engine:
-
-- **`YieldCurve`**: Manages the zero-rate curve
-  - Linear interpolation of zero rates
-  - Discount factor calculation using continuous compounding: `DF = e^(-r*t)`
-
-- **`BootstrapEngine`**: Builds the yield curve
-  - **Deposits**: Analytical solution using `z = -ln(DF) / t`
-  - **Swaps**: Numerical solution using Newton-Raphson optimization
-  - Sorts instruments by maturity for sequential bootstrapping
+Contains the dual yield curve engines:
+- **`BootstrapEngine`**: Sequentially solves for implied zero rates using numerical root-finding and returns a smooth, continuous **Natural Cubic Spline**.
+- **`NSSEngine`**: Calibrates the 6-parameter **Nelson-Siegel-Svensson (NSS)** model to market data using non-linear optimization for a globally smooth parametric fit.
 
 ### 4. **visualization.py**
-Visualization utilities for yield curves:
-
-- **`CurveVisualizer`**: Plotting class with static methods:
-  - `plot_zero_curve()`: Plots zero-rate curve with bootstrapped points
-  - `plot_discount_factors()`: Visualizes discount factor curve
-  - `plot_forward_rates()`: Shows implied 1-year forward rates
-  - `plot_all()`: Creates a 3-subplot dashboard with all curves
-
-Uses matplotlib for publication-quality plots with grid, legends, and proper formatting.
+Features a `CurveVisualizer` that plots raw market data against both the exact bootstrapped spline and the smooth NSS curve for direct visual comparison.
 
 ## Key Features
 
-✅ **Analytical Solution for Deposits**: Direct calculation of zero rates  
-✅ **Numerical Optimization for Swaps**: Newton-Raphson root-finding  
-✅ **Linear Interpolation**: Forward-looking rate estimation during optimization  
-✅ **Continuous Compounding**: Standard market convention  
-✅ **Inverted Yield Curve**: Realistic market scenario  
+✅ **Dual Curve Engines**: Compare exact local interpolation (Cubic Spline) with smooth global parametric fits (NSS).  
+✅ **Non-Linear Optimization**: Uses SciPy's SLSQP to calibrate NSS parameters to market data.  
+✅ **Smooth Interpolation**: Employs Natural Cubic Splines to prevent unnatural jumps in the exact curve.  
+✅ **Root-Finding**: Uses Newton-Raphson optimization for accurate swap rate bootstrapping.  
+✅ **Continuous Compounding**: Standard market convention applied universally.  
 
 ## Usage
+
+Run `main.py` to execute the full pipeline and launch the visual dashboard, or use the components directly:
 
 ```python
 from marketData import get_market_data
 from instruments import Deposit, InterestRateSwap
-from engine import BootstrapEngine
+from engine import BootstrapEngine, NSSEngine
 from visualization import CurveVisualizer
 
-# 1. Get market data
-market_df = get_market_data()
+# 1. Load data and create instruments
+df = get_market_data()
+instruments = [
+    Deposit(r['Instrument'], r['Maturity'], r['Rate']) if r['Type'] == 'Cash' 
+    else InterestRateSwap(r['Instrument'], r['Maturity'], r['Rate']) 
+    for _, r in df.iterrows()
+]
 
-# 2. Create instruments
-instruments = []
-for _, row in market_df.iterrows():
-    if row['Type'] == 'Cash':
-        instruments.append(Deposit(
-            name=row['Instrument'],
-            maturity=row['Maturity'],
-            rate=row['Rate']
-        ))
-    else:  # Swap
-        instruments.append(InterestRateSwap(
-            name=row['Instrument'],
-            maturity=row['Maturity'],
-            rate=row['Rate']
-        ))
+# 2. Build Exact Curve (Cubic Spline)
+boot_curve = BootstrapEngine().build_curve(instruments)
 
-# 3. Build curve
-engine = BootstrapEngine()
-curve = engine.build_curve(instruments)
+# 3. Build Parametric Curve (NSS)
+nss_engine = NSSEngine()
+nss_curve_func = nss_engine.build_curve(instruments)
 
-# 4. Use the curve
-zero_rate_at_2y = curve.get_zero_rate(2.0)
-discount_factor_at_2y = curve.get_discount_factor(2.0)
+print(f"Calibrated NSS Parameters: {nss_engine.params.round(4)}")
 
-# 5. Visualize the curve
-visualizer = CurveVisualizer()
-visualizer.plot_zero_curve(curve)
-visualizer.plot_discount_factors(curve)
-visualizer.plot_forward_rates(curve)
-# Or plot all in one dashboard:
-visualizer.plot_all(curve, show=True)
-```
-
-## Output Example
-
-```
-Instrument      | Maturity | Market Rate | Solved Zero Rate
-------------------------------------------------------------
-LIBOR_ON        | 0.00    | 5.50%       | 5.5006%
-LIBOR_3M        | 0.25    | 5.40%       | 5.3970%
-SWAP_1Y         | 1.00    | 5.20%       | 5.1924%
-SWAP_2Y         | 2.00    | 5.00%       | 4.9918%
-SWAP_3Y         | 3.00    | 4.80%       | 4.7931%
-...
+# 4. Compare Visually
+CurveVisualizer.plot_comparison(boot_curve, nss_curve_func, df)
 ```
 
 ## Requirements
 
 - `numpy`: Numerical computations
 - `pandas`: Data handling
-- `scipy`: Optimization (Newton-Raphson)
-- `matplotlib`: Visualization and plotting
+- `scipy`: Optimization and Interpolation
+- `matplotlib`: Visualization
 
 Install dependencies:
 ```bash
 pip install numpy pandas scipy matplotlib
 ```
 
-## Mathematical Details
-
-### Continuous Compounding
-$$DF(t) = e^{-r(t) \cdot t}$$
-
-### Deposit Pricing
-Simple interest: $PV = \frac{1}{1 + r \cdot t}$
-
-Zero rate: $z = -\frac{\ln(DF)}{t}$
-
-### Swap Pricing
-$$PV = \sum_{i=1}^{n} c \cdot DF(t_i) + 1.0 \cdot DF(T)$$
-
-where $c$ is the annual coupon and $T$ is maturity.
-
-## Notes
-
-- Instruments must be **sorted by maturity** for proper bootstrapping
-- The curve uses **linear interpolation** for rate estimation between known points
-- Swaps are assumed to be **par instruments** (PV = 1.0) for pricing
-- Annual coupon frequency assumed for simplicity
-
-## License
-
-MIT License
-
 ---
 
-**Author**: Fixed Income Analytics Project  
-**Date**: January 2026
+**Author**: aniketranjan75576@gmail.com  
