@@ -1,7 +1,7 @@
 import numpy as np
 from typing import List
-from scipy.optimize import newton
-from scipy.interpolate import interp1d
+from scipy.optimize import newton, minimize
+from scipy.interpolate import interp1d, CubicSpline
 from instruments import Instrument, Deposit, InterestRateSwap
 
 # --- PART 3: BOOTSTRAP ENGINE ---
@@ -33,57 +33,76 @@ class BootstrapEngine:
         self.curve = YieldCurve()
 
     def build_curve(self, instruments: List[Instrument]):
-        # Sort by maturity (Critical for bootstrapping)
+        # Sort by maturity
         sorted_instruments = sorted(instruments, key=lambda x: x.maturity)
-
-        print(f"{'Instrument':<15} | {'Maturity':<5} | {'Market Rate':<10} | {'Solved Zero Rate':<10}")
-        print("-" * 60)
+        
+        # THE FIX: Anchor the curve at t=0 using the shortest-term rate
+        # This prevents the spline from trying to jump from 0% to 5.5% in one day
+        self.curve.times = [0.0]
+        self.curve.zero_rates = [sorted_instruments[0].rate]
 
         for inst in sorted_instruments:
             if isinstance(inst, Deposit):
-                self._solve_deposit(inst)
+                df = 1.0 / (1.0 + inst.rate * inst.maturity)
+                z = -np.log(df) / inst.maturity
+                self.curve.times.append(inst.maturity)
+                self.curve.zero_rates.append(z)
             elif isinstance(inst, InterestRateSwap):
-                self._solve_swap(inst)
+                def objective(guess_rate):
+                    self.curve.times.append(inst.maturity)
+                    self.curve.zero_rates.append(guess_rate)
+                    pv = sum(cf.amount * self.curve.get_discount_factor(cf.time) for cf in inst.get_cash_flows())
+                    self.curve.times.pop()
+                    self.curve.zero_rates.pop()
+                    return pv - 1.0
+                
+                z = newton(objective, x0=self.curve.zero_rates[-1])
+                self.curve.times.append(inst.maturity)
+                self.curve.zero_rates.append(z)
+                
+        # Return a continuous Cubic Spline function
+        return CubicSpline(self.curve.times, self.curve.zero_rates, bc_type='natural')
+class NSSEngine:
+    """
+    Parametric Yield Curve Engine using Nelson-Siegel-Svensson.
+    Finds the 6 parameters that best fit the market data to a smooth formula.
+    """
+    def __init__(self):
+        # Initial Guess: [beta0, beta1, beta2, beta3, tau1, tau2]
+        self.curve = YieldCurve()
+        self.params = np.array([0.03, -0.02, 0.02, 0.01, 1.5, 5.0])
 
-        return self.curve
-
-    def _solve_deposit(self, inst: Deposit):
-        # Analytic solution for Deposits
-        # DF = 1 / (1 + r*t)
-        # DF = e^(-z*t)  =>  -z*t = ln(DF)  => z = -ln(DF)/t
-        df = 1.0 / (1.0 + inst.rate * inst.maturity)
-        zero_rate = -np.log(df) / inst.maturity
+    def nss_formula(self, t, params):
+        b0, b1, b2, b3, t1, t2 = params
+        t = np.maximum(t, 1e-6) # Prevent divide by zero error at t=0
         
-        self.curve.add_point(inst.maturity, zero_rate)
-        print(f"{inst.name:<15} | {inst.maturity:<5.2f} | {inst.rate:<10.2%} | {zero_rate:<10.4%}")
-
-    def _solve_swap(self, inst: InterestRateSwap):
-        # Numerical solution for Swaps
-        # We need to find a Zero Rate 'z' at maturity T such that Swap PV = 1.0
+        term1 = b1 * (1 - np.exp(-t/t1)) / (t/t1)
+        term2 = b2 * ((1 - np.exp(-t/t1)) / (t/t1) - np.exp(-t/t1))
+        term3 = b3 * ((1 - np.exp(-t/t2)) / (t/t2) - np.exp(-t/t2))
         
-        def objective_function(guess_rate):
-            # 1. Temporarily assume the Zero Rate at Maturity is 'guess_rate'
-            # We assume linear interpolation from the LAST known point to this new point
-            self.curve.times.append(inst.maturity)
-            self.curve.zero_rates.append(guess_rate)
-            
-            # 2. Price the swap
-            pv = 0.0
-            for cf in inst.get_cash_flows():
-                df = self.curve.get_discount_factor(cf.time)
-                pv += cf.amount * df
-            
-            # 3. Remove temp point (clean up for next iteration)
-            self.curve.times.pop()
-            self.curve.zero_rates.pop()
-            
-            # 4. Return Error (Target PV is 1.0 for Par Swap)
-            return pv - 1.0
+        return b0 + term1 + term2 + term3
 
-        # Solve for the rate that makes Error = 0
-        # Start guess can be the previous known zero rate
-        initial_guess = self.curve.zero_rates[-1]
-        solved_rate = newton(objective_function, x0=initial_guess)
+    def build_curve(self, instruments):
+        # Objective Function: Minimize Sum of Squared Errors (SSE)
+        def error_function(guess_params):
+            sse = 0.0
+            for inst in instruments:
+                model_rate = self.nss_formula(inst.maturity, guess_params)
+                sse += (model_rate - inst.rate) ** 2
+            return sse
         
-        self.curve.add_point(inst.maturity, solved_rate)
-        print(f"{inst.name:<15} | {inst.maturity:<5.2f} | {inst.rate:<10.2%} | {solved_rate:<10.4%}")
+        bnds = (
+            (-1.0, 1.0),   # beta0
+            (-1.0, 1.0),   # beta1
+            (-1.0, 1.0),   # beta2
+            (-1.0, 1.0),   # beta3
+            (0.01, 30.0),  # tau1 (Time parameter, strictly positive)
+            (0.01, 30.0)   # tau2 (Time parameter, strictly positive)
+        )
+
+        # The 'Nelder-Mead' algorithm handles non-linear curve fitting very well
+        result = minimize(error_function, self.params, method='SLSQP', bounds = bnds)
+        self.params = result.x
+        
+        # Return a callable lambda function representing the smooth curve
+        return lambda t: self.nss_formula(t, self.params)

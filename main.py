@@ -1,25 +1,39 @@
 from marketData import get_market_data
-from instruments import Instrument, Deposit, InterestRateSwap
-from engine import BootstrapEngine
+from instruments import Deposit, InterestRateSwap
+from engine import BootstrapEngine, NSSEngine
 from visualization import CurveVisualizer
 
 if __name__ == "__main__":
-    # 1. Load Data
+    print("Loading FICC Market Data...")
     df = get_market_data()
     
-    # 2. Create Objects
-    my_instruments = []
+    # Instantiate Instrument Objects
+    instruments = []
     for _, row in df.iterrows():
         if row['Type'] == 'Cash':
-            my_instruments.append(Deposit(row['Instrument'], row['Maturity'], row['Rate']))
+            instruments.append(Deposit(row['Instrument'], row['Maturity'], row['Rate']))
         else:
-            my_instruments.append(InterestRateSwap(row['Instrument'], row['Maturity'], row['Rate']))
+            instruments.append(InterestRateSwap(row['Instrument'], row['Maturity'], row['Rate']))
 
-    # 3. Run Bootstrapper
-    engine = BootstrapEngine()
-    final_curve = engine.build_curve(my_instruments)
-    print("\n--- DONE: Curve Built Successfully ---")
-
-    # 4. Visualize
-    print("Generating Plots...")
-    CurveVisualizer.plot_curve(final_curve)
+    # ---------------------------------------------------------
+    # Engine 1: Exact Bootstrapping
+    # ---------------------------------------------------------
+    print("Running Bootstrapper Engine...")
+    boot_engine = BootstrapEngine()
+    boot_curve = boot_engine.build_curve(instruments)
+    
+    # ---------------------------------------------------------
+    # Engine 2: Parametric Optimization
+    # ---------------------------------------------------------
+    print("Running NSS Optimization Engine...")
+    nss_engine = NSSEngine()
+    nss_curve_func = nss_engine.build_curve(instruments)
+    
+    print(f"\nOptimization Complete.")
+    print(f"Calibrated NSS Parameters: {nss_engine.params.round(4)}")
+    
+    # ---------------------------------------------------------
+    # Dashboard / Visualization
+    # ---------------------------------------------------------
+    print("Generating Dashboard...")
+    CurveVisualizer.plot_comparison(boot_curve, nss_curve_func, df)

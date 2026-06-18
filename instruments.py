@@ -24,6 +24,7 @@ class Deposit(Instrument):
     """ Cash Deposit: Simple Interest (1 + r*t) at maturity """
     def get_cash_flows(self) -> List[CashFlow]:
         # Cash/Libor typically pays Principal + Interest at end
+        print(f"deposit cashflow :{self}")
         return [CashFlow(self.maturity, 1.0 + (self.rate * self.maturity))]
 
 class InterestRateSwap(Instrument):
